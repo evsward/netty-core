@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:aop="http://www.springframework.org/schema/aop" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:jee="http://www.springframework.org/schema/jee" 
+	xmlns:tx="http://www.springframework.org/schema/tx"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:metrics="http://www.ryantenney.com/schema/metrics"
+	xsi:schemaLocation="
+						http://www.springframework.org/schema/beans 
+						http://www.springframework.org/schema/beans/spring-beans-3.0.xsd 
+						http://www.springframework.org/schema/tx 
+						http://www.springframework.org/schema/tx/spring-tx-3.0.xsd 
+						http://www.springframework.org/schema/jee 
+						http://www.springframework.org/schema/jee/spring-jee-3.0.xsd 
+						http://www.springframework.org/schema/context 
+						http://www.springframework.org/schema/context/spring-context-3.0.xsd 
+						http://www.springframework.org/schema/aop 
+						http://www.springframework.org/schema/aop/spring-aop-3.0.xsd 
+						http://www.ryantenney.com/schema/metrics 
+						http://www.ryantenney.com/schema/metrics/metrics-3.0.xsd">
+
+	<!-- common config  begin-->
+	
+		<context:component-scan base-package="com.netty.server" />		
+				
+		<bean id="basePipelineFactory"  class="com.netty.server.core.support.GenericPipelineFactory" abstract="true" />
+		
+		<bean id="generalUpstreamHandler"  class="com.netty.server.core.support.GenericUpstreamHandler" abstract="true" />
+				
+		<bean id="ipWhiteListValidator"  class="com.netty.server.core.support.IpWhiteListValidator" abstract="true" />
+		
+		<bean id="serverConfig" class="com.netty.server.core.support.ServerConfig" init-method="init">
+			<property name="serviceName" value="${service.name}" />
+			<property name="turnOnConfig">
+				<map>
+					<entry key="tcp.req.debug" 			value="${service.tcp.req.debug}" />
+					<entry key="tcp.req.debug.indepth" 	value="${service.tcp.req.debug.indepth}" />
+					
+					<entry key="tcp.ack.debug" 			value="${service.tcp.ack.debug}" />
+				</map>
+			</property>			
+		</bean>
+		
+	<!-- common config  end-->
+		
+	<!-- tcp config  begin-->
+	
+		<bean id="tcpServerBootstrap" class="org.jboss.netty.bootstrap.ServerBootstrap" init-method="bind">
+			<constructor-arg ref="tcpChannelFactory" />
+			<property name="pipelineFactory" ref="tcpPipelineFactory" />
+			<property name="options">
+				<map>
+					<entry key="reuseAddress" 		value="true" />
+					<entry key="sendBufferSize" 	value="65536"/>
+					<entry key="receiveBufferSize" 	value="65536" />
+					<entry key="localAddress" 		value-ref="tcpInetSocketAddress"/>
+					<entry key="child.tcpNoDelay" 	value="true" />
+					<entry key="child.keepAlive" 	value="true" />
+					<entry key="child.linger" 		value="60" />
+					<entry key="child.TIMEOUT" 		value="120" />
+				</map>
+			</property>
+		</bean>
+		
+		<bean id="tcpChannelFactory" class="org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory">
+			<constructor-arg><bean class="java.util.concurrent.Executors" factory-method="newCachedThreadPool" /></constructor-arg>
+			<constructor-arg><bean class="java.util.concurrent.Executors" factory-method="newCachedThreadPool" /></constructor-arg>
+		</bean>	
+		
+		<bean id="tcpInetSocketAddress" class="com.netty.server.core.support.InetSocketAddress" >
+			<constructor-arg index="0"><value>${service.tcp.port}</value></constructor-arg>
+	    	<constructor-arg index="1"><value>${service.tcp.name}</value></constructor-arg>
+		</bean>
+		
+		<bean id="tcpPipelineFactory" parent="basePipelineFactory">
+			<property 		name="executor" 				ref="tcpExecutionHandler" />		
+			<property 		name="handler" 					ref="tcpUpstreamHandler" />			
+			<property 		name="readTimeoutTurnon" 		value="${service.tcp.readTimeout.turnon}" />
+			
+			<lookup-method	name="getReadTimeoutHandler" 	bean="tcpReadTimeoutHandler" />
+			<lookup-method  name="getDecoder" 				bean="tcpRequestDecoder"/>
+			<lookup-method  name="getEncoder" 				bean="tcpResponseEncoder"/>
+		</bean>
+		
+		<bean id="tcpReadTimeoutHandler" class="org.jboss.netty.handler.timeout.ReadTimeoutHandler" scope="prototype">
+			<constructor-arg ref="tcpHashedWheelTimer" />	
+			<constructor-arg index="1"><value>${service.tcp.readTimeout.seconds}</value></constructor-arg>
+		</bean>
+		
+		<bean id="tcpHashedWheelTimer" class="org.jboss.netty.util.HashedWheelTimer" />
+			
+		<bean id="tcpExecutionHandler" class="org.jboss.netty.handler.execution.ExecutionHandler">
+			<constructor-arg ref="tcpThreadPoolExecutor" />	
+		</bean>
+		
+		<bean id="tcpThreadPoolExecutor" class="org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor"><!-- OrderedMemoryAwareThreadPoolExecutor -->
+			<constructor-arg index="0"><value>${service.tcp.threadPool.corePoolSize}</value></constructor-arg>			<!-- corePoolSize -->		
+			<constructor-arg index="1"><value>${service.tcp.threadPool.maxTotalMemorySize}</value></constructor-arg>		<!-- maxTotalMemorySize -->	        	
+			<constructor-arg index="2"><value>${service.tcp.threadPool.maxChannelMemorySize}</value></constructor-arg>	<!-- maxChannelMemorySize -->			
+		</bean>
+			
+		<bean id="tcpRequestDecoder" class="com.netty.server.tcp.codec.TcpRequestDecoder" scope="prototype" >
+			<property name="serverConfig" ref="serverConfig" />
+		</bean>
+		
+		<bean id="tcpResponseEncoder" class="com.netty.server.tcp.codec.TcpResponseEncoder" scope="prototype" >
+			<property name="serverConfig" ref="serverConfig" />
+		</bean>
+		
+		<bean id="tcpUpstreamHandler"  class="com.netty.server.tcp.TcpUpstreamHandler" parent="generalUpstreamHandler">	
+			<property name="closeChannelAfterWrite" value="${service.tcp.readTimeout.closeAfterWrite}" />
+			<property name="requestProcesser"   ref="tcpRequestProcesser"   />		
+			<property name="exceptionProcesser" ref="tcpExceptionProcesser" />
+		</bean>
+		
+		<bean id="tcpRequestProcesser" class="com.netty.server.tcp.TcpRequestProcesser" >
+			<property name="processController"   ref="tcpProcessController" />	
+		</bean>
+		
+		<bean id="tcpExceptionProcesser" class="com.netty.server.tcp.TcpExceptionProcesser" >
+			<property name="processController"   		ref="tcpProcessController" />
+			<property name="bizReadTimeoutReturnNone" 	value="${service.tcp.readTimeout.returnNone}" />
+		</bean>
+		
+		<bean id="tcpProcessController" class="com.netty.server.tcp.TcpProcessController" >
+			<property name="controlerConfig"    ref="tcpControlerConfig" />	
+			<property name="messageConverter"   ref="tcpMessageConverter" />
+			<property name="requestValidators" >
+				<list>
+					<ref bean="tcpMessageValidator" />
+			    </list>
+			</property>
+		</bean>
+		
+		<bean id="tcpMessageValidator" class="com.netty.server.tcp.validator.TcpMessageValidator" parent="ipWhiteListValidator" init-method="init" >	
+			<property name="propertiesFileName"    value="${service.ipwhitelist.filename}" />		<!-- ipwhitelist.properties -->
+			<property name="keyPrefix"   		   value="${service.ipwhitelist.tcp.keyPrefix}" />	<!-- tcp.cmd.global=172.28.19.76 -->
+		</bean>	
+		
+		<bean id="tcpMessageConverter" class="com.netty.server.tcp.TcpMessageConverter" >
+			<property name="controlerConfig"   ref="tcpControlerConfig" />
+		</bean>
+		
+		<bean id="tcpControlerConfig" class="com.netty.server.tcp.TcpControlerConfig" init-method="init" />
+		
+		
+	<!-- tcp config end-->
+	
+	<!-- http config begin-->
+	
+		<bean id="httpServerBootstrap" class="org.jboss.netty.bootstrap.ServerBootstrap" init-method="bind">
+			<constructor-arg ref="httpChannelFactory" />
+			<property name="pipelineFactory" ref="httpPipelineFactory"></property>
+			<property name="options">
+				<map>
+					<entry key="reuseAddress" 		value="true" />
+					<entry key="localAddress" 		value-ref="httpInetSocketAddress"/>				
+					
+					<entry key="child.tcpNoDelay" 	value="true" />
+					<entry key="child.keepAlive" 	value="true" />				
+					<entry key="child.linger" 		value="60" />
+					<entry key="child.TIMEOUT" 		value="120" />
+				</map>
+			</property>
+		</bean>
+			
+		<bean id="httpChannelFactory" class="org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory">
+			<constructor-arg><bean class="java.util.concurrent.Executors" factory-method="newCachedThreadPool" /></constructor-arg>
+			<constructor-arg><bean class="java.util.concurrent.Executors" factory-method="newCachedThreadPool" /></constructor-arg>
+		</bean>
+			
+		<bean id="httpInetSocketAddress" class="com.netty.server.core.support.InetSocketAddress">
+			<constructor-arg index="0"><value>${service.http.port}</value></constructor-arg>
+	    	<constructor-arg index="1"><value>${service.http.name}</value></constructor-arg>
+		</bean>
+		
+		<bean id="httpPipelineFactory" parent="basePipelineFactory">
+			<property 	name="executor" 			ref="httpExecutionHandler" />
+			<property 	name="handler"  			ref="httpUpstreamHandler" />	<!-- annotation inject -->			
+			<property 	name="readTimeoutTurnon" 	value="${service.http.readTimeout.turnon}" />
+			
+			<lookup-method	name="getReadTimeoutHandler" 	bean="tcpReadTimeoutHandler" />
+			<lookup-method name="getDecoder" 				bean="httpDecoder"/>
+			<lookup-method name="getEncoder" 				bean="httpEncoder"/>
+		</bean>
+		
+		<bean id="httpReadTimeoutHandler" class="org.jboss.netty.handler.timeout.ReadTimeoutHandler"  scope="prototype">
+			<constructor-arg ref="httpHashedWheelTimer" />	
+			<constructor-arg index="1"><value>${service.http.readTimeout.seconds}</value></constructor-arg>
+		</bean>
+		
+		<bean id="httpHashedWheelTimer" class="org.jboss.netty.util.HashedWheelTimer" />
+		
+		<bean id="httpExecutionHandler" class="org.jboss.netty.handler.execution.ExecutionHandler">
+			<constructor-arg ref="httpThreadPoolExecutor" />	
+		</bean>
+	
+		<bean id="httpThreadPoolExecutor" class="org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor">
+			<constructor-arg index="0"><value>${service.http.threadPool.corePoolSize}</value></constructor-arg>				<!-- corePoolSize -->		        	
+			<constructor-arg index="1"><value>${service.http.threadPool.maxTotalMemorySize}</value></constructor-arg>		<!-- maxTotalMemorySize -->	
+			<constructor-arg index="2"><value>${service.http.threadPool.maxChannelMemorySize}</value></constructor-arg>		<!-- maxChannelMemorySize -->			
+		</bean>
+		
+		<bean id="httpDecoder" class="com.netty.server.http.codec.HttpRequestDecoder"  scope="prototype" >
+			<property name="serverConfig" ref="serverConfig" />
+		</bean>
+		
+		<bean id="httpEncoder" class="com.netty.server.http.codec.HttpResponseEncoder" scope="prototype" />
+						
+		<!-- =================================================================== -->
+		
+		<bean id="httpUpstreamHandler"  class="com.netty.server.http.HttpUpstreamHandler" parent="generalUpstreamHandler">			
+			<property name="closeChannelAfterWrite" value="true" />
+			<property name="requestProcesser"   ref="httpRequestProcesser"   />		
+			<property name="exceptionProcesser" ref="httpExceptionProcesser" />
+		</bean>
+		
+		<bean id="httpRequestProcesser" class="com.netty.server.http.HttpRequestProcesser" >
+			<property name="processController"   ref="httpProcessController" />	
+		</bean>
+		
+		<bean id="httpExceptionProcesser" class="com.netty.server.http.HttpExceptionProcesser" >
+			<property name="processController"   ref="httpProcessController" />
+		</bean>
+		
+		<bean id="httpProcessController" class="com.netty.server.http.HttpProcessController" >
+			<property name="controlerConfig"    ref="httpControlerConfig" />	
+			<property name="messageConverter"   ref="httpMessageConverter" />
+			<property name="requestValidators" >
+				<list>
+					<ref bean="httpMessageValidator" />
+			    </list>
+			</property>
+		</bean>
+			
+		<bean id="httpMessageValidator" class="com.netty.server.http.validator.HttpMessageValidator" parent="ipWhiteListValidator" init-method="init" >
+			<property name="propertiesFileName"    value="${service.ipwhitelist.filename}" />			<!-- ipwhitelist.properties -->
+			<property name="keyPrefix"   		   value="${service.ipwhitelist.http.keyPrefix}" />		<!-- http.uri.global=172.28.19.76 -->
+			<property name="excludesList">
+				<set>
+        			<value>/</value>
+				</set>
+			</property>
+		</bean>	
+			
+		<bean id="httpMessageConverter" class="com.netty.server.http.HttpMessageConverter"  >			
+			<property name="converters">
+				<map key-type="com.netty.server.http.message.HttpResponseContentType">
+					<entry key="json" 		value-ref="httpResponseJsonConverter" />
+					<entry key="text" 		value-ref="httpResponseTextConverter"/>
+					<entry key="image" 		value-ref="httpResponseImageConverter"/>
+					<entry key="redirect" 	value-ref="httpResponseRedirectConverter"/>
+					<entry key="html" 		value-ref="httpResponseHtmlConverter"/>
+					<entry key="proxy" 		value-ref="httpResponseProxyConverter"/>
+				</map>
+			</property>
+		</bean>
+				
+		<bean id="httpResponseJsonConverter" class="com.netty.server.http.converter.HttpResponseJsonConverter" />
+		
+		<bean id="httpResponseTextConverter" class="com.netty.server.http.converter.HttpResponseTextConverter" />
+		
+		<bean id="httpResponseImageConverter" class="com.netty.server.http.converter.HttpResponseImageConverter" />
+		
+		<bean id="httpResponseRedirectConverter" class="com.netty.server.http.converter.HttpResponseRedirectConverter" />
+				
+		<bean id="httpControlerConfig" class="com.netty.server.http.HttpControlerConfig" init-method="init" >
+			<property name="defaultHttpHandler" ref="${service.http.handler.default}" />
+		</bean>
+		
+		<bean id="httpResponseHtmlConverter" class="com.netty.server.http.converter.HttpResponseHtmlConverter" />
+		
+		<bean id="httpResponseProxyConverter" class="com.netty.server.http.converter.HttpResponseProxyConverter" />
+		
+
+	<!-- admin config begin-->	
+		<bean id="ipWhiteListRefreshHttpHandler" class="com.netty.server.http.handler.IpWhiteListRefreshHttpHandler" >
+			<property name="managerIp"   		value="${service.admin.managerIp}" />
+		</bean>
+		
+		<bean id="ipWhiteListCheckHttpHandler" class="com.netty.server.http.handler.IpWhiteListCheckHttpHandler" >
+			<property name="ipWhiteListValidators" >
+				<list>
+					<ref bean="httpMessageValidator" />
+					<ref bean="tcpMessageValidator" />
+			    </list>
+			</property>
+		</bean>
+		
+		<bean id="ipWhiteListTcpAddHttpHandler" class="com.netty.server.http.handler.IpWhiteListTcpAddHttpHandler" >
+			<property name="managerIp"   			value="${service.admin.managerIp}" />
+			<property name="ipWhiteListValidator"   ref="tcpMessageValidator" />			
+		</bean>
+		
+		<bean id="ipWhiteListHttpAddHttpHandler" class="com.netty.server.http.handler.IpWhiteListHttpAddHttpHandler" >
+			<property name="managerIp"   			value="${service.admin.managerIp}" />
+			<property name="ipWhiteListValidator"   ref="httpMessageValidator" />
+		</bean>
+		
+	<!-- admin config end-->
+ 
+	<!-- http config end-->
+
+
+</beans>

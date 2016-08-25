@@ -1,0 +1,13 @@
+option java_package = "com.netty.server.tcp.message";
+option java_outer_classname = "SystemMessage";
+
+message AlertMessage
+{
+	required int32  code = 1;    	//alert code
+	optional string remark= 2;	//alert remark
+}
+
+message PingMessage
+{
+	optional string remark= 1;	//ping remark
+}
